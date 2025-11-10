@@ -1,15 +1,124 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
-generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
-}
-
 datasource db {
   provider = "mongodb"
   url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+//////////////////////////////////////////////////////////////
+// Enums
+//////////////////////////////////////////////////////////////
+
+enum Emotion {
+  NEUTRAL
+  HAPPY
+  SAD
+  ANGRY
+  STRESSED
+}
+
+enum MessageRole {
+  USER
+  BOT
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+//////////////////////////////////////////////////////////////
+// User (Mapped from Clerk)
+//////////////////////////////////////////////////////////////
+
+model User {
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+  clerkId  String  @unique
+  email    String  @unique
+  name     String?
+  imageUrl String?
+
+  data     DataPoint[]
+  sessions ChatSession[]
+  alerts   EmergencyAlert[]
+  settings UserSettings?
+}
+
+//////////////////////////////////////////////////////////////
+// Time-Series Data
+//////////////////////////////////////////////////////////////
+
+model DataPoint {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
+
+  timestamp DateTime @default(now())
+  heartRate Int?
+  spO2      Float?
+  emotion   Emotion?
+}
+
+//////////////////////////////////////////////////////////////
+// Chat System
+//////////////////////////////////////////////////////////////
+
+model ChatSession {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime      @default(now())
+  messages  ChatMessage[]
+}
+
+model ChatMessage {
+  id        String      @id @default(auto()) @map("_id") @db.ObjectId
+  sessionId String      @db.ObjectId
+  session   ChatSession @relation(fields: [sessionId], references: [id])
+
+  role      MessageRole
+  content   String
+  createdAt DateTime    @default(now())
+}
+
+//////////////////////////////////////////////////////////////
+// Alerts
+//////////////////////////////////////////////////////////////
+
+model EmergencyAlert {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime      @default(now())
+  severity  AlertSeverity
+  message   String
+}
+
+//////////////////////////////////////////////////////////////
+// Helpline Directory (simple)
+//////////////////////////////////////////////////////////////
+
+model HelplineResource {
+  id    String  @id @default(auto()) @map("_id") @db.ObjectId
+  name  String
+  phone String?
+  url   String?
+}
+
+//////////////////////////////////////////////////////////////
+// User Settings (simple 1:1)
+//////////////////////////////////////////////////////////////
+
+model UserSettings {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @unique @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
+
+  notificationsEnabled Boolean @default(true)
 }
