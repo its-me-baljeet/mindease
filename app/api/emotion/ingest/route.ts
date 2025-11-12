@@ -1,89 +1,117 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
+import { broadcast } from "@/lib/realtime"; // ✅ Optional: if you have real-time dashboard updates
 import { Emotion } from "@prisma/client";
 import prismaClient from "@/services/prisma";
-import { broadcast } from "@/lib/realtime";
 
-function hashKey(key: string) {
+// 👇 Allow dynamic rendering so IoT requests aren't blocked by Clerk middleware
+export const dynamic = "force-dynamic";
+
+/** Hash API keys using SHA-256 */
+function hashKeyRaw(key: string): string {
   return crypto.createHash("sha256").update(key).digest("hex");
 }
 
-const EMOTION_MAP: Record<string, Emotion> = {
-  happy: "HAPPY",
-  neutral: "NEUTRAL",
-  sad: "SAD",
-  angry: "ANGRY",
-  // Map other DeepFace labels to nearest category
-  fear: "STRESSED",
-  disgust: "STRESSED",
-  surprise: "STRESSED",
-  stress: "STRESSED",
-  stressed: "STRESSED",
-};
+/** Safely map string -> Emotion enum */
+function normalizeEmotion(value: any): Emotion | null {
+  if (typeof value !== "string") return null;
+  const upper = value.toUpperCase();
+  return Object.values(Emotion).includes(upper as Emotion) ? (upper as Emotion) : null;
+}
 
 export async function POST(req: Request) {
   try {
-    const key = req.headers.get("x-emotion-key");
-    if (!key)
-      return NextResponse.json(
-        { error: "Missing X-Emotion-Key" },
-        { status: 401 }
-      );
+    // -------------------------
+    // 1️⃣ Validate API Key
+    // -------------------------
+    const headerKey =
+      req.headers.get("x-emotion-key") ?? req.headers.get("X-Emotion-Key") ?? "";
+    if (!headerKey)
+      return NextResponse.json({ error: "Missing X-Emotion-Key" }, { status: 401 });
 
-    const hashed = hashKey(key);
+    const hashed = hashKeyRaw(headerKey);
+
+    // Find the user whose stored hash matches
     const user = await prismaClient.user.findFirst({
-      where: { emotionKeyHash: hashed },
+      where: {
+        OR: [
+          { apiKeyHash: hashed },
+          { emotionKeyHash: hashed },
+        ],
+      },
     });
+
     if (!user)
-      return NextResponse.json({ error: "Invalid key" }, { status: 401 });
+      return NextResponse.json({ error: "Invalid X-Emotion-Key" }, { status: 401 });
 
-    const body = await req.json();
-    const { emotion, confidence, timestamp } = body ?? {};
+    // -------------------------
+    // 2️⃣ Parse and normalize body
+    // -------------------------
+    const body = await req.json().catch(() => ({}));
+    const { heartRate, spO2, emotion, confidence, timestamp } = body ?? {};
 
-    if (typeof emotion !== "string" || !emotion) {
-      return NextResponse.json({ error: "emotion required" }, { status: 400 });
-    }
+    const hr =
+      typeof heartRate === "number" && !isNaN(heartRate)
+        ? Math.round(heartRate)
+        : null;
+    const sp =
+      typeof spO2 === "number" && !isNaN(spO2) ? Number(spO2) : null;
+    const em = normalizeEmotion(emotion);
+    const ts = timestamp ? new Date(Number(timestamp)) : new Date();
 
-    const normalized = EMOTION_MAP[emotion.toLowerCase()] ?? "STRESSED";
-    let ts = new Date();
-    if (typeof timestamp === "number") ts = new Date(timestamp * 1000);
-    if (typeof timestamp === "string") {
-      const maybe = new Date(timestamp);
-      if (!isNaN(maybe.getTime())) ts = maybe;
-    }
-
-    const SCORE: Record<string, number> = {
-      HAPPY: 20,
-      NEUTRAL: 40,
-      SAD: 65,
-      ANGRY: 75,
-      STRESSED: 85,
-    };
-    const stressScore = SCORE[normalized] ?? 50;
-
-    const row = await prismaClient.dataPoint.create({
+    // -------------------------
+    // 3️⃣ Save to Prisma
+    // -------------------------
+    const dataPoint = await prismaClient.dataPoint.create({
       data: {
         userId: user.id,
-        emotion: normalized,
+        heartRate: hr,
+        spO2: sp,
+        emotion: em,
         timestamp: ts,
-        stressScore,
       },
     });
 
-    broadcast({
-      type: "emotion",
-      userId: user.clerkId,
-      row: {
-        id: row.id,
-        timestamp: row.timestamp,
-        emotion: row.emotion,
-        stressScore: row.stressScore ?? null,
-      },
-    });
+    // -------------------------
+    // 4️⃣ Broadcast via WebSocket (optional)
+    // -------------------------
+    try {
+      broadcast({
+        type: "emotion",
+        userClerkId: user.clerkId,
+        row: {
+          id: dataPoint.id,
+          timestamp: dataPoint.timestamp,
+          heartRate: dataPoint.heartRate,
+          spO2: dataPoint.spO2,
+          emotion: dataPoint.emotion,
+        },
+      });
+    } catch (err) {
+      console.warn("Broadcast skipped:", err);
+    }
 
-    return NextResponse.json({ ok: true }, { status: 201 });
-  } catch (e) {
-    console.error(e);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    // -------------------------
+    // 5️⃣ Respond
+    // -------------------------
+    return NextResponse.json(
+      { ok: true, id: dataPoint.id },
+      { status: 201 }
+    );
+  } catch (err: any) {
+    console.error("Ingest route error:", err);
+    return NextResponse.json(
+      { error: err.message ?? "Server error" },
+      { status: 500 }
+    );
   }
+}
+
+/** Optional quick test for GET */
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    route: "/api/emotion/ingest",
+    message: "Use POST with JSON body and X-Emotion-Key header",
+  });
 }

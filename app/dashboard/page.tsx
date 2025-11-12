@@ -1,3 +1,4 @@
+import AssistantClient from "@/components/assistant/assistant-client";
 import EmotionChartWrapper from "@/components/charts/emotion-chart-wrapper";
 import prismaClient from "@/services/prisma";
 import prisma from "@/services/prisma";
@@ -64,7 +65,7 @@ export default async function Dashboard() {
           <EmotionChartWrapper />
         </section>
 
-        <form action="/api/simulate" method="post" className="space-y-3">
+        {/* <form action="/api/simulate" method="post" className="space-y-3">
           <input
             name="heartRate"
             placeholder="Heart Rate"
@@ -86,7 +87,8 @@ export default async function Dashboard() {
           >
             Add Reading
           </button>
-        </form>
+        </form> */}
+        <AssistantClient />
       </section>
     </main>
   );
