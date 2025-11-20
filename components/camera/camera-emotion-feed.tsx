@@ -1,198 +1,127 @@
 "use client";
 
-import { TextEncoder as NodeTextEncoder } from "util";
+import * as faceapi from "@vladmandic/face-api";
 import { useEffect, useRef, useState, useCallback } from "react";
 
-type EmotionState = {
-  label: string;
-  confidence: number;
-  expressions: Record<string, number>;
-};
+type EmotionState = { label: string; confidence: number; expressions: Record<string, number> };
 
-const EMOTION_API_KEY = process.env.NEXT_PUBLIC_EMOTION_API_KEY || "";
-const SEND_INTERVAL_MS = 2000;
 const DETECTION_INTERVAL_MS = 300;
-const SMOOTHING_WINDOW = 5;
+const OBSERVATION_DURATION_MS = 30000; // 30 sec
 
 export default function CameraEmotionFeed() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const detectorRef = useRef<number | null>(null);
+  const observations = useRef<EmotionState[]>([]);
+  const startTime = useRef<number>(0);
+
   const [loading, setLoading] = useState(false);
-  const [isRunning, setIsRunning] = useState(false);
+  const [running, setRunning] = useState(false);
   const [currentEmotion, setCurrentEmotion] = useState<EmotionState | null>(null);
-  const lastSentRef = useRef<number>(0);
-  const intervalIdRef = useRef<number | null>(null);
-  const emotionHistory = useRef<EmotionState[]>([]);
+  const [countdown, setCountdown] = useState(OBSERVATION_DURATION_MS / 1000);
+  const [supportReady, setSupportReady] = useState(false);
 
-  /** 🔹 Send emotion to backend */
-  const sendToBackend = useCallback((emotion: string, confidence: number) => {
-    if (!EMOTION_API_KEY) {
-      console.warn("NEXT_PUBLIC_EMOTION_API_KEY missing.");
-      return;
-    }
+  // Detect emotion once
+  const detectEmotion = useCallback(async () => {
+    if (!videoRef.current) return;
+    const result = await faceapi.detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions()).withFaceExpressions();
+    if (!result?.expressions) return;
 
-    const now = Date.now();
-    if (now - lastSentRef.current < SEND_INTERVAL_MS) return;
-    lastSentRef.current = now;
+    const expressions = result.expressions as unknown as Record<string, number>;
+    const [label, confidence] = Object.entries(expressions).reduce((a, b) => (b[1] > a[1] ? b : a));
+    const emotion = { label, confidence, expressions };
+    setCurrentEmotion(emotion);
 
-    fetch("/api/ingest", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Emotion-Key": EMOTION_API_KEY,
-      },
-      body: JSON.stringify({ emotion, confidence, source: "camera", timestamp: now }),
-    }).catch(console.error);
+    observations.current.push(emotion);
   }, []);
 
-  /** 🔹 Detect emotions (dynamically import face-api here) */
-  const detectEmotionOnce = useCallback(async () => {
-    if (!videoRef.current) return;
-
-    // Dynamically load faceapi only on client
-    const faceapi = await import("@vladmandic/face-api");
-
-    const detections = await faceapi
-      .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-      .withFaceExpressions();
-
-    if (!detections?.expressions) return;
-
-    // Proper TS casting
-    const expressions = detections.expressions as unknown as Record<string, number>;
-    const [label, confidence] = Object.entries(expressions).reduce((a, b) =>
-      b[1] > a[1] ? b : a
-    );
-
-    const newEmotion: EmotionState = { label, confidence, expressions };
-    setCurrentEmotion(newEmotion);
-
-    // Smoothing logic
-    emotionHistory.current = [
-      ...emotionHistory.current.slice(-SMOOTHING_WINDOW + 1),
-      newEmotion,
-    ];
-
-    const avgExpressions: Record<string, number> = {};
-    for (const item of emotionHistory.current) {
-      for (const [k, v] of Object.entries(item.expressions)) {
-        avgExpressions[k] = (avgExpressions[k] || 0) + v;
-      }
-    }
-    for (const k in avgExpressions) {
-      avgExpressions[k] /= emotionHistory.current.length;
-    }
-
-    const [smoothLabel, smoothConf] = Object.entries(avgExpressions).reduce((a, b) =>
-      b[1] > a[1] ? b : a
-    );
-
-    sendToBackend(smoothLabel, smoothConf);
-  }, [sendToBackend]);
-
-  /** 🔹 Start camera */
-  const startCamera = useCallback(async () => {
-    if (isRunning) return;
+  // Start observation
+  const start = useCallback(async () => {
+    if (running) return;
     setLoading(true);
+    observations.current = [];
+    startTime.current = Date.now();
+    setSupportReady(false);
 
     try {
-      // Polyfill TextEncoder if needed
-if (typeof window !== "undefined" && !("TextEncoder" in window)) {
-  (window as unknown as { TextEncoder: typeof NodeTextEncoder }).TextEncoder = NodeTextEncoder;
-}
-
-      const faceapi = await import("@vladmandic/face-api");
       await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
       await faceapi.nets.faceExpressionNet.loadFromUri("/models");
 
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (!videoRef.current) return;
+      videoRef.current!.srcObject = stream;
+      videoRef.current!.onloadedmetadata = () => videoRef.current!.play();
 
-      videoRef.current.srcObject = stream;
-      videoRef.current.onloadedmetadata = () => videoRef.current?.play();
+      detectorRef.current = window.setInterval(detectEmotion, DETECTION_INTERVAL_MS);
 
-      intervalIdRef.current = window.setInterval(detectEmotionOnce, DETECTION_INTERVAL_MS);
-      setIsRunning(true);
+      setRunning(true);
     } catch (err) {
-      console.error("Camera start failed:", err);
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
+  }, [detectEmotion, running]);
 
-    setLoading(false);
-  }, [detectEmotionOnce, isRunning]);
+  // Stop observation
+  const stop = useCallback(() => {
+    setRunning(false);
 
-  /** 🔹 Stop camera */
-  const stopCamera = useCallback(() => {
-    setIsRunning(false);
-
-    if (intervalIdRef.current) {
-      window.clearInterval(intervalIdRef.current);
-      intervalIdRef.current = null;
-    }
+    if (detectorRef.current) clearInterval(detectorRef.current);
+    detectorRef.current = null;
 
     if (videoRef.current?.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach((track) => track.stop());
+      (videoRef.current.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
       videoRef.current.srcObject = null;
     }
 
+    setCountdown(OBSERVATION_DURATION_MS / 1000);
     setCurrentEmotion(null);
   }, []);
 
-  /** 🔹 Cleanup */
+  // Countdown timer
   useEffect(() => {
-    return () => stopCamera();
-  }, [stopCamera]);
+    if (!running) return;
+
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(0, OBSERVATION_DURATION_MS - (Date.now() - startTime.current));
+      setCountdown(Math.ceil(remaining / 1000));
+      if (remaining <= 0) {
+        window.clearInterval(timer);
+        setRunning(false);
+        setSupportReady(true);
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [running]);
+
+  useEffect(() => stop, [stop]);
+
+  // Get support
+  const getSupport = async () => {
+    const res = await fetch("/api/get-support", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ observations: observations.current }),
+    });
+    const data = await res.json();
+    if (data.supportMessage) alert("💬 " + data.supportMessage);
+  };
 
   return (
-    <div className="flex flex-col md:flex-row gap-4 items-start">
-      <div className="flex flex-col items-start gap-2">
-        {loading && <p className="text-gray-500">Loading camera & models...</p>}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          width={400}
-          height={300}
-          className="rounded-lg shadow-lg border border-zinc-700"
-        />
+    <div>
+      {loading && <p>Starting...</p>}
+      <video ref={videoRef} muted autoPlay width={400} height={300} />
 
-        <div className="flex gap-2">
-          {!isRunning ? (
-            <button onClick={startCamera} className="px-4 py-2 bg-green-600 rounded-xl text-white">
-              Start Camera
-            </button>
-          ) : (
-            <button onClick={stopCamera} className="px-4 py-2 bg-red-600 rounded-xl text-white">
-              Stop Camera
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="min-w-60 rounded-lg border border-zinc-700 bg-zinc-900 p-4 text-sm">
-        <h2 className="text-lg font-semibold mb-2">Live Emotion</h2>
-        {!currentEmotion ? (
-          <p className="text-zinc-400">Face not detected yet…</p>
+      <div className="mt-2">
+        {!running ? (
+          <button onClick={start} className="bg-green-500 px-4 py-2 text-white">Start Observation</button>
         ) : (
-          <>
-            <p className="text-base mb-2">
-              <strong className="text-blue-400">Dominant:</strong> {currentEmotion.label}{" "}
-              <span className="text-zinc-400">
-                ({(currentEmotion.confidence * 100).toFixed(1)}%)
-              </span>
-            </p>
-
-            <div className="space-y-1">
-              {Object.entries(currentEmotion.expressions).map(([name, value]) => (
-                <div key={name} className="flex justify-between capitalize text-zinc-300">
-                  <span>{name}</span>
-                  <span className="text-zinc-400">{(value * 100).toFixed(1)}%</span>
-                </div>
-              ))}
-            </div>
-          </>
+          <button onClick={stop} className="bg-red-500 px-4 py-2 text-white">Stop</button>
         )}
       </div>
+
+      {running && <p>⏱ Observing… {countdown}s left</p>}
+      {supportReady && <button onClick={getSupport} className="bg-blue-500 px-4 py-2 text-white">Get Support</button>}
+      {currentEmotion && <p>🧠 {currentEmotion.label} ({(currentEmotion.confidence * 100).toFixed(1)}%)</p>}
     </div>
   );
 }
