@@ -25,7 +25,7 @@ export default function CameraEmotionFeed({
   const detectorRef = useRef<number | null>(null);
   const observationsRef = useRef<EmotionState[]>([]);
   const startTimeRef = useRef<number>(0);
-  const lastSentRef = useRef<number>(0); // FIXED 🔥
+  const lastSentRef = useRef<number>(0);
 
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
@@ -35,7 +35,7 @@ export default function CameraEmotionFeed({
   const [supportMessage, setSupportMessage] = useState<string | null>(null);
   const [isLoadingSupport, setIsLoadingSupport] = useState(false);
 
-  // 🔍 Detect emotion once
+  // Detect emotion once
   const detectEmotion = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
@@ -57,7 +57,7 @@ export default function CameraEmotionFeed({
     // Collect for 30s observation
     observationsRef.current.push(emotion);
 
-    // 📡 Save to DB (rate-limited)
+    // Save to DB (rate-limited)
     if (Date.now() - lastSentRef.current >= SEND_INTERVAL_MS) {
       lastSentRef.current = Date.now();
 
@@ -77,13 +77,13 @@ export default function CameraEmotionFeed({
     }
   }, []);
 
-  // ▶ Start observation
+  // Start observation
   const start = useCallback(async () => {
     if (running) return;
     setLoading(true);
     observationsRef.current = [];
     startTimeRef.current = Date.now();
-    lastSentRef.current = 0; // Reset send timer
+    lastSentRef.current = 0;
     setSupportReady(false);
     setSupportMessage(null);
 
@@ -110,7 +110,7 @@ export default function CameraEmotionFeed({
     }
   }, [detectEmotion, running]);
 
-  // ⏹ Stop observation
+  // Stop observation
   const stop = useCallback(() => {
     setRunning(false);
 
@@ -118,7 +118,9 @@ export default function CameraEmotionFeed({
     detectorRef.current = null;
 
     if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
+      (videoRef.current.srcObject as MediaStream)
+        .getTracks()
+        .forEach((track) => track.stop());
       videoRef.current.srcObject = null;
     }
 
@@ -138,18 +140,18 @@ export default function CameraEmotionFeed({
 
       if (remaining <= 0) {
         clearInterval(timerId);
-        setRunning(false);
+        stop();
         setSupportReady(true);
       }
     }, 1000);
 
     return () => clearInterval(timerId);
-  }, [running]);
+  }, [running, stop]);
 
   // Cleanup
   useEffect(() => stop, [stop]);
 
-  // 🌐 Get AI support
+  // Get AI support
   const getSupport = async () => {
     if (!supportReady) return;
     setIsLoadingSupport(true);
@@ -170,55 +172,78 @@ export default function CameraEmotionFeed({
       console.error(err);
     } finally {
       setIsLoadingSupport(false);
+      setSupportReady(false);
     }
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      {loading && <p className="text-zinc-400">Starting camera…</p>}
+    <div className="space-y-4">
+      {loading && (
+        <p className="text-zinc-400 text-sm animate-pulse">Starting camera…</p>
+      )}
 
-      <video
-        ref={videoRef}
-        muted
-        autoPlay
-        playsInline
-        width={400}
-        height={300}
-        className="rounded-lg border border-zinc-700 shadow-lg bg-black"
-      />
+      <div className="relative overflow-hidden rounded-xl border border-zinc-800/50 bg-black aspect-video">
+        <video
+          ref={videoRef}
+          muted
+          autoPlay
+          playsInline
+          className="w-full h-full object-cover"
+        />
+        {!running && !loading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/50 backdrop-blur-sm">
+            <p className="text-zinc-400">Camera inactive</p>
+          </div>
+        )}
+      </div>
 
-      {/* 🎛 Control Buttons */}
-      <div className="flex gap-2">
+      {/* Control Buttons */}
+      <div className="flex gap-3">
         {!running ? (
-          <button onClick={start} className="bg-green-500 hover:bg-green-600 px-4 py-2 rounded-xl text-white text-sm">
+          <button
+            onClick={start}
+            className="flex-1 px-4 py-3 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 text-white rounded-xl font-medium transition-all duration-300 hover:scale-[1.02] active:scale-95 shadow-lg hover:shadow-green-500/30"
+          >
             Start Observation (30s)
           </button>
         ) : (
-          <button onClick={stop} className="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-xl text-white text-sm">
+          <button
+            onClick={stop}
+            className="flex-1 px-4 py-3 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white rounded-xl font-medium transition-all duration-300 hover:scale-[1.02] active:scale-95 shadow-lg hover:shadow-red-500/30"
+          >
             Stop
           </button>
         )}
       </div>
 
-      {running && <p className="text-yellow-400 text-sm">⏱ Observing… <strong>{countdown}s</strong></p>}
+      {running && (
+        <div className="flex items-center justify-between p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl">
+          <span className="text-yellow-400 text-sm font-medium">
+            ⏱ Observing…
+          </span>
+          <span className="text-yellow-400 text-lg font-bold">{countdown}s</span>
+        </div>
+      )}
 
       {currentEmotion && (
-        <p className="text-sm text-zinc-200">
-          🧠 {currentEmotion.label} <span className="text-zinc-400">({(currentEmotion.confidence * 100).toFixed(1)}%)</span>
-        </p>
+        <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-xl">
+          <p className="text-sm text-blue-300">
+            🧠 <span className="font-semibold">{currentEmotion.label}</span>
+            <span className="text-blue-400 ml-2">
+              ({(currentEmotion.confidence * 100).toFixed(1)}%)
+            </span>
+          </p>
+        </div>
       )}
 
       {supportReady && (
-        <button onClick={getSupport} disabled={isLoadingSupport} className="bg-blue-500 hover:bg-blue-600 disabled:opacity-60 px-4 py-2 rounded-xl text-white text-sm">
+        <button
+          onClick={getSupport}
+          disabled={isLoadingSupport}
+          className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-all duration-300 hover:scale-[1.02] active:scale-95 shadow-lg hover:shadow-blue-500/30"
+        >
           {isLoadingSupport ? "🤔 Thinking…" : "✨ Get AI Support"}
         </button>
-      )}
-
-      {supportMessage && (
-        <div className="mt-2 rounded-lg border border-zinc-700 bg-zinc-900 p-3 text-sm whitespace-pre-line text-zinc-100">
-          <p className="font-semibold mb-1">AI Support</p>
-          {supportMessage}
-        </div>
       )}
     </div>
   );

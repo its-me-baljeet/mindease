@@ -1,3 +1,4 @@
+// components/charts/emotion-chart.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,6 +19,12 @@ type Row = {
   emotion: "NEUTRAL" | "HAPPY" | "SAD" | "ANGRY" | "STRESSED" | null;
 };
 
+type ChartDataPoint = {
+  t: string;
+  score: number;
+  emotion: string;
+};
+
 const EMO_SCORE: Record<NonNullable<Row["emotion"]>, number> = {
   NEUTRAL: 40,
   HAPPY: 20,
@@ -26,7 +33,7 @@ const EMO_SCORE: Record<NonNullable<Row["emotion"]>, number> = {
   STRESSED: 85,
 };
 
-function scoreFromEmotion(e: Row["emotion"]) {
+function scoreFromEmotion(e: Row["emotion"]): number {
   if (!e) return 50;
   return EMO_SCORE[e] ?? 50;
 }
@@ -53,9 +60,8 @@ export default function EmotionChart() {
 
   // Live WS
   useEffect(() => {
-    if (!userId) return; // Don't connect if no user logged in
+    if (!userId) return;
 
-    // connect once
     const ws = new WebSocket(
       (location.protocol === "https:" ? "wss://" : "ws://") +
         location.host +
@@ -71,11 +77,12 @@ export default function EmotionChart() {
       try {
         const msg = JSON.parse(ev.data);
         if (msg?.type === "emotion" && msg?.userId && msg?.timestamp) {
-          // Only accept events for current user
           if (userId && msg.userId !== userId) return;
           setRows((prev) => [...prev, msg.row].slice(-200));
         }
-      } catch {}
+      } catch (err) {
+        console.error("WebSocket message error:", err);
+      }
     };
 
     ws.onerror = (err) => {
@@ -93,7 +100,7 @@ export default function EmotionChart() {
     };
   }, [userId]);
 
-  const data = useMemo(() => {
+  const data: ChartDataPoint[] = useMemo(() => {
     return rows.map((r) => ({
       t: new Date(r.timestamp).toLocaleTimeString(),
       score: scoreFromEmotion(r.emotion),
@@ -102,20 +109,49 @@ export default function EmotionChart() {
   }, [rows]);
 
   return (
-    <div className="w-full h-72">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="t" />
-          <YAxis domain={[0, 100]} />
-          <Tooltip />
-          <Line type="monotone" dataKey="score" dot={false} />
-        </LineChart>
-      </ResponsiveContainer>
-      <div className="mt-2 text-sm text-zinc-500">
-        Stress Score (emotion-only): lower is better. HAPPY≈20, NEUTRAL≈40,
-        SAD≈65, ANGRY≈75, STRESSED≈85.
+    <div className="w-full">
+      <div className="h-72 bg-zinc-950/50 rounded-xl p-4 border border-zinc-800/50">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data}>
+            <defs>
+              <linearGradient id="colorGradient" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor="#3b82f6" />
+                <stop offset="100%" stopColor="#10b981" />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+            <XAxis
+              dataKey="t"
+              stroke="#71717a"
+              style={{ fontSize: "12px" }}
+            />
+            <YAxis
+              domain={[0, 100]}
+              stroke="#71717a"
+              style={{ fontSize: "12px" }}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "#18181b",
+                border: "1px solid #3f3f46",
+                borderRadius: "8px",
+                color: "#fff",
+              }}
+            />
+            <Line
+              type="monotone"
+              dataKey="score"
+              stroke="url(#colorGradient)"
+              strokeWidth={3}
+              dot={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
+      <p className="mt-3 text-xs text-zinc-500">
+        Stress Score: Lower is better • HAPPY≈20 • NEUTRAL≈40 • SAD≈65 • ANGRY≈75
+        • STRESSED≈85
+      </p>
     </div>
   );
 }

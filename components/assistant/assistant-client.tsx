@@ -1,7 +1,8 @@
+// components/assistant/assistant-client.tsx
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown"; // <-- Install this
+import ReactMarkdown from "react-markdown";
 
 type ChatMessage = {
   id: string;
@@ -20,7 +21,7 @@ export default function AssistantClient({
     {
       id: "welcome",
       role: "assistant",
-      content: "Hi, I’m MindEase. How are you feeling today? 😊",
+      content: "Hi, I'm MindEase. How are you feeling today? 😊",
     },
   ]);
 
@@ -30,7 +31,12 @@ export default function AssistantClient({
 
   // Scroll to bottom when new message arrives
   useEffect(() => {
-    chatBoxRef.current?.scrollTo(0, chatBoxRef.current.scrollHeight);
+    if (chatBoxRef.current) {
+      chatBoxRef.current.scrollTo({
+        top: chatBoxRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
   }, [messages]);
 
   // Function to append a new message
@@ -84,36 +90,46 @@ export default function AssistantClient({
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      sendMessage();
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3">
       {/* Chat Window */}
       <div
         ref={chatBoxRef}
-        className="border border-zinc-700 rounded-lg p-3 h-72 overflow-y-auto bg-zinc-900 text-sm"
+        className="h-80 overflow-y-auto p-4 bg-zinc-950/50 rounded-xl border border-zinc-800/50 space-y-3"
       >
         {messages.map((m) => (
           <div
             key={m.id}
-            className={`mb-2 ${m.role === "user" ? "text-right" : "text-left"}`}
+            className={`flex ${
+              m.role === "user" ? "justify-end" : "justify-start"
+            } animate-[slideUp_0.3s_ease-out]`}
           >
-            <span
-              className={`inline-block px-3 py-2 rounded-2xl max-w-[80%] wrap-break-word ${
+            <div
+              className={`max-w-[80%] px-4 py-3 rounded-2xl shadow-lg ${
                 m.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : "bg-zinc-800 text-zinc-200"
+                  ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white"
+                  : "bg-zinc-800/80 text-zinc-100"
               }`}
             >
-              <ReactMarkdown>{m.content}</ReactMarkdown>
-            </span>
+              <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
+                <ReactMarkdown>{m.content}</ReactMarkdown>
+              </div>
+            </div>
           </div>
         ))}
 
-        {/* 🔁 AI is thinking indicator */}
+        {/* AI is thinking indicator */}
         {loadingResponse && (
-          <div className="text-left mb-2">
-            <span className="inline-block px-3 py-2 rounded-2xl bg-zinc-800 text-zinc-400 text-sm animate-pulse">
-              Assistant is thinking…
-            </span>
+          <div className="flex justify-start">
+            <div className="px-4 py-3 bg-zinc-800/80 rounded-2xl animate-pulse">
+              <p className="text-sm text-zinc-400">Assistant is thinking…</p>
+            </div>
           </div>
         )}
       </div>
@@ -122,17 +138,17 @@ export default function AssistantClient({
       <div className="flex gap-2">
         <input
           type="text"
-          className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-white outline-none"
+          className="flex-1 px-4 py-3 bg-zinc-950/50 border border-zinc-800/50 rounded-xl text-white placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all duration-200"
           placeholder="Type a message..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+          onKeyDown={handleKeyDown}
           disabled={loadingResponse}
         />
         <button
           onClick={sendMessage}
           disabled={!input.trim() || loadingResponse}
-          className="px-5 py-2 rounded-xl bg-blue-600 text-white disabled:opacity-50"
+          className="px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-all duration-300 hover:scale-105 active:scale-95 shadow-lg hover:shadow-blue-500/30"
         >
           {loadingResponse ? "..." : "Send"}
         </button>
