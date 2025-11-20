@@ -1,58 +1,142 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown"; // <-- Install this
 
-export default function AssistantClient() {
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+type AssistantClientProps = {
+  externalSupportMessage?: string | null;
+};
+
+export default function AssistantClient({
+  externalSupportMessage,
+}: AssistantClientProps) {
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content: "Hi, I’m MindEase. How are you feeling today? 😊",
+    },
+  ]);
+
   const [input, setInput] = useState("");
-  const [reply, setReply] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loadingResponse, setLoadingResponse] = useState(false);
+  const chatBoxRef = useRef<HTMLDivElement>(null);
 
-  async function handleSend() {
-    setLoading(true);
+  // Scroll to bottom when new message arrives
+  useEffect(() => {
+    chatBoxRef.current?.scrollTo(0, chatBoxRef.current.scrollHeight);
+  }, [messages]);
+
+  // Function to append a new message
+  const addMessage = useCallback(
+    (content: string, role: "assistant" | "user") => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${role}-${Date.now()}`,
+          role,
+          content,
+        },
+      ]);
+    },
+    []
+  );
+
+  // Handle external support AI summary message
+  useEffect(() => {
+    if (externalSupportMessage) {
+      Promise.resolve().then(() =>
+        addMessage(externalSupportMessage, "assistant")
+      );
+    }
+  }, [externalSupportMessage, addMessage]);
+
+  // Handle user sending a message
+  const sendMessage = async () => {
+    if (!input.trim() || loadingResponse) return;
+
+    const userMessage = input.trim();
+    setInput("");
+    addMessage(userMessage, "user");
+
     try {
-      const res = await fetch("/api/assistant/chat", {
+      setLoadingResponse(true);
+
+      const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inputText: input,
-          emotion: "HAPPY", // placeholder
-          heartRate: 75, // placeholder
-          spO2: 98, // placeholder
-        }),
+        body: JSON.stringify({ message: userMessage }),
       });
 
       const data = await res.json();
-      setReply(data.reply);
+      if (data.reply) addMessage(data.reply, "assistant");
     } catch (err) {
-      console.error(err);
-      setReply("Error sending to Gemini.");
+      console.error("Chat error:", err);
+      addMessage("⚠️ Something went wrong. Please try again.", "assistant");
     } finally {
-      setLoading(false);
+      setLoadingResponse(false);
     }
-  }
+  };
 
   return (
-    <div className="p-6 max-w-lg mx-auto space-y-4 border rounded-lg">
-      <h2 className="text-xl font-semibold">MindEase AI Assistant (Gemini)</h2>
-      <textarea
-        className="w-full p-2 border rounded-md"
-        rows={3}
-        placeholder="Type your thoughts..."
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-      />
-      <button
-        onClick={handleSend}
-        disabled={loading}
-        className="bg-blue-600 text-white px-4 py-2 rounded-md"
+    <div className="flex flex-col gap-3">
+      {/* Chat Window */}
+      <div
+        ref={chatBoxRef}
+        className="border border-zinc-700 rounded-lg p-3 h-72 overflow-y-auto bg-zinc-900 text-sm"
       >
-        {loading ? "Thinking..." : "Send"}
-      </button>
-      {reply && (
-        <div className="mt-4 p-3 bg-gray-100 rounded-md text-gray-800">
-          <strong>Assistant:</strong> {reply}
-        </div>
-      )}
+        {messages.map((m) => (
+          <div
+            key={m.id}
+            className={`mb-2 ${m.role === "user" ? "text-right" : "text-left"}`}
+          >
+            <span
+              className={`inline-block px-3 py-2 rounded-2xl max-w-[80%] wrap-break-word ${
+                m.role === "user"
+                  ? "bg-blue-600 text-white"
+                  : "bg-zinc-800 text-zinc-200"
+              }`}
+            >
+              <ReactMarkdown>{m.content}</ReactMarkdown>
+            </span>
+          </div>
+        ))}
+
+        {/* 🔁 AI is thinking indicator */}
+        {loadingResponse && (
+          <div className="text-left mb-2">
+            <span className="inline-block px-3 py-2 rounded-2xl bg-zinc-800 text-zinc-400 text-sm animate-pulse">
+              Assistant is thinking…
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Input */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-white outline-none"
+          placeholder="Type a message..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+          disabled={loadingResponse}
+        />
+        <button
+          onClick={sendMessage}
+          disabled={!input.trim() || loadingResponse}
+          className="px-5 py-2 rounded-xl bg-blue-600 text-white disabled:opacity-50"
+        >
+          {loadingResponse ? "..." : "Send"}
+        </button>
+      </div>
     </div>
   );
 }

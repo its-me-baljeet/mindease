@@ -1,3 +1,4 @@
+// components/camera/camera-emotion-feed.tsx
 "use client";
 
 import * as faceapi from "@vladmandic/face-api";
@@ -10,13 +11,21 @@ type EmotionState = {
 };
 
 const DETECTION_INTERVAL_MS = 300;
-const OBSERVATION_DURATION_MS = 30000; // 30 sec
+const OBSERVATION_DURATION_MS = 30_000; // 30 sec
+const SEND_INTERVAL_MS = 2000; // DB post rate-limit
 
-export default function CameraEmotionFeed() {
-  const videoRef = useRef<HTMLVideoElement>(null);
+type CameraEmotionFeedProps = {
+  onSupportMessage?: (message: string) => void;
+};
+
+export default function CameraEmotionFeed({
+  onSupportMessage,
+}: CameraEmotionFeedProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const detectorRef = useRef<number | null>(null);
-  const observations = useRef<EmotionState[]>([]);
-  const startTime = useRef<number>(0);
+  const observationsRef = useRef<EmotionState[]>([]);
+  const startTimeRef = useRef<number>(0);
+  const lastSentRef = useRef<number>(0); // FIXED 🔥
 
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
@@ -26,7 +35,7 @@ export default function CameraEmotionFeed() {
   const [supportMessage, setSupportMessage] = useState<string | null>(null);
   const [isLoadingSupport, setIsLoadingSupport] = useState(false);
 
-  // Detect emotion once
+  // 🔍 Detect emotion once
   const detectEmotion = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
@@ -45,27 +54,52 @@ export default function CameraEmotionFeed() {
     const emotion: EmotionState = { label, confidence, expressions };
     setCurrentEmotion(emotion);
 
-    observations.current.push(emotion);
+    // Collect for 30s observation
+    observationsRef.current.push(emotion);
+
+    // 📡 Save to DB (rate-limited)
+    if (Date.now() - lastSentRef.current >= SEND_INTERVAL_MS) {
+      lastSentRef.current = Date.now();
+
+      await fetch("/api/emotion/ingest", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Emotion-Key": process.env.NEXT_PUBLIC_EMOTION_API_KEY ?? "",
+        },
+        body: JSON.stringify({
+          emotion: label,
+          confidence,
+          source: "camera",
+          timestamp: Date.now(),
+        }),
+      }).catch((err) => console.error("Ingest error:", err));
+    }
   }, []);
 
-  // Start observation
+  // ▶ Start observation
   const start = useCallback(async () => {
     if (running) return;
     setLoading(true);
-    setSupportMessage(null);
-    observations.current = [];
-    startTime.current = Date.now();
+    observationsRef.current = [];
+    startTimeRef.current = Date.now();
+    lastSentRef.current = 0; // Reset send timer
     setSupportReady(false);
+    setSupportMessage(null);
 
     try {
       await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
       await faceapi.nets.faceExpressionNet.loadFromUri("/models");
 
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadedmetadata = () => videoRef.current?.play();
+      const video = videoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
       }
+
+      video.srcObject = stream;
+      video.onloadedmetadata = () => video.play().catch(console.error);
 
       detectorRef.current = window.setInterval(detectEmotion, DETECTION_INTERVAL_MS);
       setRunning(true);
@@ -76,107 +110,114 @@ export default function CameraEmotionFeed() {
     }
   }, [detectEmotion, running]);
 
-  // Stop observation
+  // ⏹ Stop observation
   const stop = useCallback(() => {
     setRunning(false);
 
-    if (detectorRef.current) {
-      clearInterval(detectorRef.current);
-      detectorRef.current = null;
-    }
+    if (detectorRef.current !== null) clearInterval(detectorRef.current);
+    detectorRef.current = null;
 
     if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream)
-        .getTracks()
-        .forEach((t) => t.stop());
+      (videoRef.current.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
       videoRef.current.srcObject = null;
     }
 
-    setCurrentEmotion(null);
     setCountdown(OBSERVATION_DURATION_MS / 1000);
+    setCurrentEmotion(null);
   }, []);
 
-  useEffect(() => stop, [stop]);
-
-  // Countdown Timer
+  // Countdown timer
   useEffect(() => {
     if (!running) return;
-
-    const timer = window.setInterval(() => {
-      const elapsed = Date.now() - startTime.current;
-      const remaining = Math.max(0, OBSERVATION_DURATION_MS - elapsed);
+    const timerId = window.setInterval(() => {
+      const remaining = Math.max(
+        0,
+        OBSERVATION_DURATION_MS - (Date.now() - startTimeRef.current)
+      );
       setCountdown(Math.ceil(remaining / 1000));
 
       if (remaining <= 0) {
-        clearInterval(timer);
+        clearInterval(timerId);
         setRunning(false);
         setSupportReady(true);
       }
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => clearInterval(timerId);
   }, [running]);
 
-  // Fetch support message
+  // Cleanup
+  useEffect(() => stop, [stop]);
+
+  // 🌐 Get AI support
   const getSupport = async () => {
+    if (!supportReady) return;
     setIsLoadingSupport(true);
+
     try {
       const res = await fetch("/api/get-support", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ observations: observations.current }),
+        body: JSON.stringify({ observations: observationsRef.current }),
       });
 
       const data = await res.json();
       if (data.supportMessage) {
-        setSupportMessage(data.supportMessage); // Show in UI
+        setSupportMessage(data.supportMessage);
+        onSupportMessage?.(data.supportMessage);
       }
     } catch (err) {
-      console.error("Support fetch error:", err);
-      setSupportMessage("⚠️ Unable to fetch emotional support at this moment.");
+      console.error(err);
     } finally {
       setIsLoadingSupport(false);
     }
   };
 
   return (
-    <div>
-      {loading && <p>Starting camera...</p>}
-      <video ref={videoRef} muted autoPlay width={400} height={300} />
+    <div className="flex flex-col gap-3">
+      {loading && <p className="text-zinc-400">Starting camera…</p>}
 
-      <div className="mt-2 flex gap-2">
+      <video
+        ref={videoRef}
+        muted
+        autoPlay
+        playsInline
+        width={400}
+        height={300}
+        className="rounded-lg border border-zinc-700 shadow-lg bg-black"
+      />
+
+      {/* 🎛 Control Buttons */}
+      <div className="flex gap-2">
         {!running ? (
-          <button onClick={start} className="bg-green-500 px-4 py-2 rounded text-white">
-            Start Observation
+          <button onClick={start} className="bg-green-500 hover:bg-green-600 px-4 py-2 rounded-xl text-white text-sm">
+            Start Observation (30s)
           </button>
         ) : (
-          <button onClick={stop} className="bg-red-500 px-4 py-2 rounded text-white">
+          <button onClick={stop} className="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-xl text-white text-sm">
             Stop
           </button>
         )}
       </div>
 
-      {running && <p>⏱ Observing… {countdown}s left</p>}
+      {running && <p className="text-yellow-400 text-sm">⏱ Observing… <strong>{countdown}s</strong></p>}
 
       {currentEmotion && (
-        <p>
-          🧠 {currentEmotion.label} ({(currentEmotion.confidence * 100).toFixed(1)}%)
+        <p className="text-sm text-zinc-200">
+          🧠 {currentEmotion.label} <span className="text-zinc-400">({(currentEmotion.confidence * 100).toFixed(1)}%)</span>
         </p>
       )}
 
       {supportReady && (
-        <button
-          onClick={getSupport}
-          disabled={isLoadingSupport}
-          className="bg-blue-500 px-4 py-2 rounded text-white mt-2"
-        >
-          {isLoadingSupport ? "Analyzing..." : "Get Support"}
+        <button onClick={getSupport} disabled={isLoadingSupport} className="bg-blue-500 hover:bg-blue-600 disabled:opacity-60 px-4 py-2 rounded-xl text-white text-sm">
+          {isLoadingSupport ? "🤔 Thinking…" : "✨ Get AI Support"}
         </button>
       )}
 
       {supportMessage && (
-        <div className="mt-3 p-3 bg-zinc-800 border border-zinc-600 rounded-lg text-sm">
-          <p className="text-zinc-200 whitespace-pre-line">{supportMessage}</p>
+        <div className="mt-2 rounded-lg border border-zinc-700 bg-zinc-900 p-3 text-sm whitespace-pre-line text-zinc-100">
+          <p className="font-semibold mb-1">AI Support</p>
+          {supportMessage}
         </div>
       )}
     </div>
