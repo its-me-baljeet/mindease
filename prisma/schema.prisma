@@ -42,8 +42,8 @@ model User {
   name     String?
   imageUrl String?
 
-  apiKeyHash      String? @unique
-  emotionKeyHash  String? @unique   // <-- unique already creates an index
+  apiKeyHash     String? @unique
+  emotionKeyHash String? @unique // <-- unique already creates an index
 
   data     DataPoint[]
   sessions ChatSession[]
@@ -51,26 +51,27 @@ model User {
   settings UserSettings?
 }
 
-
-
 //////////////////////////////////////////////////////////////
 // Time-Series Data
 //////////////////////////////////////////////////////////////
 
 model DataPoint {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId    String   @db.ObjectId
-  user      User     @relation(fields: [userId], references: [id])
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id])
 
-  timestamp DateTime @default(now())
-  heartRate Int?
-  spO2      Float?
-  emotion   Emotion?
-  stressScore Int?
+  timestamp     DateTime @default(now())
+  heartRate     Int?
+  spO2          Float?
+  emotion       Emotion?
+  confidence    Float? // emotion confidence
+  source        String? // e.g., "iot", "camera" or "merged"
+  deviceId      String? // device identifier
+  correlationId String? // optional to pair modal readings across devices (UUID)
+  merged        Boolean  @default(true) // true for canonical merged record
 
   @@index([userId, timestamp])
 }
-
 
 //////////////////////////////////////////////////////////////
 // Chat System
@@ -118,6 +119,20 @@ model HelplineResource {
   name  String
   phone String?
   url   String?
+}
+
+model RawReading {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String   @db.ObjectId
+  timestamp     DateTime @default(now())
+  payload       Json
+  source        String
+  deviceId      String?
+  correlationId String?
+  processed     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
 
 //////////////////////////////////////////////////////////////

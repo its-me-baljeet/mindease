@@ -4,6 +4,7 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 // --- PUBLIC ROUTES (no Clerk required) ---
 const isPublicRoute = createRouteMatcher([
   "/",                     // homepage
+  "/api/ingest(.*)",
   "/api/emotion/ws",   // emotion streaming WS
   "/api/emotion/ingest",   // device-key emotion ingestion
   "/api/iot/ingest",       // device-key IoT ingestion
